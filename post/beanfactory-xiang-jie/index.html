@@ -1,0 +1,296 @@
+<html>
+  <head>
+    <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BeanFactory详解 | BoiledPork</title>
+<link rel="shortcut icon" href="https://jzf936389030.github.io/BoiledPork/favicon.ico?v=1663897662276">
+<link href="https://cdn.jsdelivr.net/npm/remixicon@2.3.0/fonts/remixicon.css" rel="stylesheet">
+<link rel="stylesheet" href="https://jzf936389030.github.io/BoiledPork/styles/main.css">
+<link rel="alternate" type="application/atom+xml" title="BeanFactory详解 | BoiledPork - Atom Feed" href="https://jzf936389030.github.io/BoiledPork/atom.xml">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Droid+Serif:400,700">
+
+
+
+    <meta name="description" content="BeanFactory定义了IOC容器的最基本形式，并提供了IOC容器应遵守的的最基本的接口。
+首先定义需要使用的类
+public class PhoneApplication {
+    @Configuration
+    static..." />
+    <meta name="keywords" content="spring" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.10.0/katex.min.css">
+    <script src="//cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.5.1/build/highlight.min.js"></script>
+  </head>
+  <body>
+    <div class="main">
+      <div class="main-content">
+        <div class="site-header">
+  <a href="https://jzf936389030.github.io/BoiledPork">
+  <img class="avatar" src="https://jzf936389030.github.io/BoiledPork/images/avatar.png?v=1663897662276" alt="">
+  </a>
+  <h1 class="site-title">
+    BoiledPork
+  </h1>
+  <p class="site-description">
+    vbb-温故而知新
+  </p>
+  <div class="menu-container">
+    
+      
+        <a href="https://jzf936389030.github.io/BoiledPork" class="menu">
+          首页
+        </a>
+      
+    
+      
+        <a href="https://jzf936389030.github.io/BoiledPork/archives" class="menu">
+          归档
+        </a>
+      
+    
+      
+        <a href="https://jzf936389030.github.io/BoiledPork/tags" class="menu">
+          标签
+        </a>
+      
+    
+      
+        <a href="https://jzf936389030.github.io/BoiledPork/post/hello-gridea" class="menu">
+          关于
+        </a>
+      
+    
+  </div>
+  <div class="social-container">
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+  </div>
+</div>
+
+        <div class="post-detail">
+          <article class="post">
+            <h2 class="post-title">
+              BeanFactory详解
+            </h2>
+            <div class="post-info">
+              <span>
+                2022-09-22
+              </span>
+              <span>
+                4 min read
+              </span>
+              
+                <a href="https://jzf936389030.github.io/BoiledPork/tag/JHYqwJSui/" class="post-tag">
+                  # spring
+                </a>
+              
+            </div>
+            
+            <div class="post-content-wrapper">
+              <div class="post-content" v-pre>
+                <p>BeanFactory定义了IOC容器的最基本形式，并提供了IOC容器应遵守的的最基本的接口。</p>
+<p>首先定义需要使用的类</p>
+<pre><code class="language-java">public class PhoneApplication {
+    @Configuration
+    static class Config {
+        @Bean
+        public Bean1 bean1() {
+            return new Bean1();
+        }
+
+        @Bean
+        public Bean2 bean2() {
+            return new Bean2();
+        }
+    }
+static class Bean1 {
+        private static final Logger log = LoggerFactory.getLogger(Bean1.class);
+
+        public Bean1() {
+            log.debug(&quot;构造 Bean1()&quot;);
+        }
+
+        @Autowired
+        private Bean2 bean2;
+
+        public Bean2 getBean2() {
+            return bean2;
+        }
+
+       
+    }
+static class Bean2 {
+        private static final Logger log = LoggerFactory.getLogger(Bean2.class);
+
+        public Bean2() {
+            log.debug(&quot;构造 Bean2()&quot;);
+        }
+    }
+
+}
+</code></pre>
+<p>DefaultListableBeanFactory 是BeanFactory 最重要的实现</p>
+<h3 id="使用-defaultlistablebeanfactory-添加bean的定义">使用 DefaultListableBeanFactory 添加bean的定义</h3>
+<pre><code class="language-java">public static void main(String[] args) {
+DefaultListableBeanFactory beanFactory = new DefaultListableBeanFactory();
+        // bean 的定义（class, scope, 初始化, 销毁）
+AbstractBeanDefinition beanDefinition =
+                BeanDefinitionBuilder.genericBeanDefinition(Config.class)                     .setScope(&quot;singleton&quot;).getBeanDefinition();
+        //构造好后放入beanFactory
+beanFactory.registerBeanDefinition(&quot;config&quot;, beanDefinition);
+
+for (String beanDefinitionName : beanFactory.getBeanDefinitionNames()) {
+            System.err.println(beanDefinitionName);
+        }
+}
+</code></pre>
+<p>执行结果<br>
+<img src="https://jzf936389030.github.io/BoiledPork/post-images/1663846627767.jpg" alt="" loading="lazy"><br>
+发现打印出来的只有config这一个bean，其中的bean1、bean2并没有被打印出来，也就说明了bean1、bean2 上方添加@Bean注解并没有生效，所以得出结论：beanFactory并没有解析@Configuration、@Bean、@Autowired的功能。</p>
+<h3 id="解析各种的注解并不是beanfactory的功能而是由各种后处理器提供的">解析各种的注解并不是beanFactory的功能，而是由各种后处理器提供的</h3>
+<p>给beanFactory添加各种后处理器</p>
+<pre><code class="language-java">AnnotationConfigUtils.registerAnnotationConfigProcessors(beanFactory);
+</code></pre>
+<p>打印结果如下：</p>
+<pre><code class="language-java">Config
+//解析@Configuration
+org.springframework.context.annotation.internalConfigurationAnnotationProcessor
+//解析@Autowired
+org.springframework.context.annotation.internalAutowiredAnnotationProcessor
+//解析@Resource
+org.springframework.context.annotation.internalCommonAnnotationProcessor
+org.springframework.context.event.internalEventListenerProcessor
+org.springframework.context.event.internalEventListenerFactory
+</code></pre>
+<p>此时打印信息中已经出现了各种后处理器，但bean1、bean2并没有被打印出来，我们接下往下看<br>
+此前我们只是把各种后处理器添加到beanFactory中，但它们并没有工作，换句话说就是，此时添加的后处理器并没有跟beanFactory产生关系,添加以下代码即可让他们产生。</p>
+<pre><code class="language-java">        //获取各种BeanFactory后处理器
+beanFactory.getBeansOfType(BeanFactoryPostProcessor.class).values().forEach(beanFactoryPostProcessor -&gt; {
+            beanFactoryPostProcessor.postProcessBeanFactory(beanFactory);
+        });
+for (String beanDefinitionName : beanFactory.getBeanDefinitionNames()) {
+            System.err.println(beanDefinitionName);
+        }
+</code></pre>
+<p>打印结果如下：bean1、bean2已经被打印出来了</p>
+<pre><code class="language-java">Config
+org.springframework.context.annotation.internalConfigurationAnnotationProcessor
+org.springframework.context.annotation.internalAutowiredAnnotationProcessor
+org.springframework.context.annotation.internalCommonAnnotationProcessor
+org.springframework.context.event.internalEventListenerProcessor
+org.springframework.context.event.internalEventListenerFactory
+bean1
+bean2
+</code></pre>
+<p>但此时获取的bean并不是完全可用的，我们打印下</p>
+<pre><code class="language-java">System.out.println(beanFactory.getBean(Bean1.class).getBean2());
+</code></pre>
+<p>结果如下：</p>
+<pre><code class="language-java">20:31:07.628 [main] DEBUG com.pig4cloud.pig.phone.PhoneApplication$Bean1 - 构造 Bean1()
+null
+
+</code></pre>
+<p>我们可以看出 bean1 构造出来了，但bean2却没有,这是因为@Autowired的功能还并没有被实现，此前我们添加的是 beanFactory的后处理器，解析的是@bean，要处理@Autowired、@Configuration注解，则需要添加bean的后处理器，下面上代码</p>
+<pre><code class="language-java">// Bean 后处理器, 针对 bean 的生命周期的各个阶段提供扩展, 例如 @Autowired @Resource ...
+beanFactory.getBeansOfType(BeanPostProcessor.class).values().forEach(beanPostProcessor -&gt; {
+            beanFactory.addBeanPostProcessor(beanPostProcessor);
+        });
+</code></pre>
+<p>打印结果：</p>
+<pre><code class="language-java">20:36:30.885 [main] DEBUG com.pig4cloud.pig.phone.PhoneApplication$Bean1 - 构造 Bean1()
+20:36:30.896 [main] DEBUG org.springframework.beans.factory.support.DefaultListableBeanFactory - Creating shared instance of singleton bean 'bean2'
+</code></pre>
+
+              </div>
+              <div class="toc-container">
+                <ul class="markdownIt-TOC">
+<li>
+<ul>
+<li>
+<ul>
+<li><a href="#%E4%BD%BF%E7%94%A8-defaultlistablebeanfactory-%E6%B7%BB%E5%8A%A0bean%E7%9A%84%E5%AE%9A%E4%B9%89">使用 DefaultListableBeanFactory 添加bean的定义</a></li>
+<li><a href="#%E8%A7%A3%E6%9E%90%E5%90%84%E7%A7%8D%E7%9A%84%E6%B3%A8%E8%A7%A3%E5%B9%B6%E4%B8%8D%E6%98%AFbeanfactory%E7%9A%84%E5%8A%9F%E8%83%BD%E8%80%8C%E6%98%AF%E7%94%B1%E5%90%84%E7%A7%8D%E5%90%8E%E5%A4%84%E7%90%86%E5%99%A8%E6%8F%90%E4%BE%9B%E7%9A%84">解析各种的注解并不是beanFactory的功能，而是由各种后处理器提供的</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+              </div>
+            </div>
+          </article>
+        </div>
+
+        
+          <div class="next-post">
+            <div class="next">下一篇</div>
+            <a href="https://jzf936389030.github.io/BoiledPork/post/hello-gridea/">
+              <h3 class="post-title">
+                Hello Gridea
+              </h3>
+            </a>
+          </div>
+        
+
+        
+
+        <div class="site-footer">
+  Powered by <a href="https://github.com/getgridea/gridea" target="_blank">Gridea</a>
+  <a class="rss" href="https://jzf936389030.github.io/BoiledPork/atom.xml" target="_blank">
+    <i class="ri-rss-line"></i> RSS
+  </a>
+</div>
+
+      </div>
+    </div>
+
+    <script>
+      hljs.initHighlightingOnLoad()
+
+      let mainNavLinks = document.querySelectorAll(".markdownIt-TOC a");
+
+      // This should probably be throttled.
+      // Especially because it triggers during smooth scrolling.
+      // https://lodash.com/docs/4.17.10#throttle
+      // You could do like...
+      // window.addEventListener("scroll", () => {
+      //    _.throttle(doThatStuff, 100);
+      // });
+      // Only not doing it here to keep this Pen dependency-free.
+
+      window.addEventListener("scroll", event => {
+        let fromTop = window.scrollY;
+
+        mainNavLinks.forEach((link, index) => {
+          let section = document.getElementById(decodeURI(link.hash).substring(1));
+          let nextSection = null
+          if (mainNavLinks[index + 1]) {
+            nextSection = document.getElementById(decodeURI(mainNavLinks[index + 1].hash).substring(1));
+          }
+          if (section.offsetTop <= fromTop) {
+            if (nextSection) {
+              if (nextSection.offsetTop > fromTop) {
+                link.classList.add("current");
+              } else {
+                link.classList.remove("current");    
+              }
+            } else {
+              link.classList.add("current");
+            }
+          } else {
+            link.classList.remove("current");
+          }
+        });
+      });
+
+    </script>
+  </body>
+</html>

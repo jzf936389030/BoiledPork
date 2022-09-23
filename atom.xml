@@ -1,0 +1,165 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+    <id>https://jzf936389030.github.io/BoiledPork</id>
+    <title>BoiledPork</title>
+    <updated>2022-09-23T01:48:20.027Z</updated>
+    <generator>https://github.com/jpmonette/feed</generator>
+    <link rel="alternate" href="https://jzf936389030.github.io/BoiledPork"/>
+    <link rel="self" href="https://jzf936389030.github.io/BoiledPork/atom.xml"/>
+    <subtitle>vbb-温故而知新</subtitle>
+    <logo>https://jzf936389030.github.io/BoiledPork/images/avatar.png</logo>
+    <icon>https://jzf936389030.github.io/BoiledPork/favicon.ico</icon>
+    <rights>All rights reserved 2022, BoiledPork</rights>
+    <entry>
+        <title type="html"><![CDATA[BeanFactory详解]]></title>
+        <id>https://jzf936389030.github.io/BoiledPork/post/beanfactory-xiang-jie/</id>
+        <link href="https://jzf936389030.github.io/BoiledPork/post/beanfactory-xiang-jie/">
+        </link>
+        <updated>2022-09-22T11:21:59.000Z</updated>
+        <content type="html"><![CDATA[<p>BeanFactory定义了IOC容器的最基本形式，并提供了IOC容器应遵守的的最基本的接口。</p>
+<p>首先定义需要使用的类</p>
+<pre><code class="language-java">public class PhoneApplication {
+    @Configuration
+    static class Config {
+        @Bean
+        public Bean1 bean1() {
+            return new Bean1();
+        }
+
+        @Bean
+        public Bean2 bean2() {
+            return new Bean2();
+        }
+    }
+static class Bean1 {
+        private static final Logger log = LoggerFactory.getLogger(Bean1.class);
+
+        public Bean1() {
+            log.debug(&quot;构造 Bean1()&quot;);
+        }
+
+        @Autowired
+        private Bean2 bean2;
+
+        public Bean2 getBean2() {
+            return bean2;
+        }
+
+       
+    }
+static class Bean2 {
+        private static final Logger log = LoggerFactory.getLogger(Bean2.class);
+
+        public Bean2() {
+            log.debug(&quot;构造 Bean2()&quot;);
+        }
+    }
+
+}
+</code></pre>
+<p>DefaultListableBeanFactory 是BeanFactory 最重要的实现</p>
+<h3 id="使用-defaultlistablebeanfactory-添加bean的定义">使用 DefaultListableBeanFactory 添加bean的定义</h3>
+<pre><code class="language-java">public static void main(String[] args) {
+DefaultListableBeanFactory beanFactory = new DefaultListableBeanFactory();
+        // bean 的定义（class, scope, 初始化, 销毁）
+AbstractBeanDefinition beanDefinition =
+                BeanDefinitionBuilder.genericBeanDefinition(Config.class)                     .setScope(&quot;singleton&quot;).getBeanDefinition();
+        //构造好后放入beanFactory
+beanFactory.registerBeanDefinition(&quot;config&quot;, beanDefinition);
+
+for (String beanDefinitionName : beanFactory.getBeanDefinitionNames()) {
+            System.err.println(beanDefinitionName);
+        }
+}
+</code></pre>
+<p>执行结果<br>
+<img src="https://jzf936389030.github.io/BoiledPork/post-images/1663846627767.jpg" alt="" loading="lazy"><br>
+发现打印出来的只有config这一个bean，其中的bean1、bean2并没有被打印出来，也就说明了bean1、bean2 上方添加@Bean注解并没有生效，所以得出结论：beanFactory并没有解析@Configuration、@Bean、@Autowired的功能。</p>
+<h3 id="解析各种的注解并不是beanfactory的功能而是由各种后处理器提供的">解析各种的注解并不是beanFactory的功能，而是由各种后处理器提供的</h3>
+<p>给beanFactory添加各种后处理器</p>
+<pre><code class="language-java">AnnotationConfigUtils.registerAnnotationConfigProcessors(beanFactory);
+</code></pre>
+<p>打印结果如下：</p>
+<pre><code class="language-java">Config
+//解析@Configuration
+org.springframework.context.annotation.internalConfigurationAnnotationProcessor
+//解析@Autowired
+org.springframework.context.annotation.internalAutowiredAnnotationProcessor
+//解析@Resource
+org.springframework.context.annotation.internalCommonAnnotationProcessor
+org.springframework.context.event.internalEventListenerProcessor
+org.springframework.context.event.internalEventListenerFactory
+</code></pre>
+<p>此时打印信息中已经出现了各种后处理器，但bean1、bean2并没有被打印出来，我们接下往下看<br>
+此前我们只是把各种后处理器添加到beanFactory中，但它们并没有工作，换句话说就是，此时添加的后处理器并没有跟beanFactory产生关系,添加以下代码即可让他们产生。</p>
+<pre><code class="language-java">        //获取各种BeanFactory后处理器
+beanFactory.getBeansOfType(BeanFactoryPostProcessor.class).values().forEach(beanFactoryPostProcessor -&gt; {
+            beanFactoryPostProcessor.postProcessBeanFactory(beanFactory);
+        });
+for (String beanDefinitionName : beanFactory.getBeanDefinitionNames()) {
+            System.err.println(beanDefinitionName);
+        }
+</code></pre>
+<p>打印结果如下：bean1、bean2已经被打印出来了</p>
+<pre><code class="language-java">Config
+org.springframework.context.annotation.internalConfigurationAnnotationProcessor
+org.springframework.context.annotation.internalAutowiredAnnotationProcessor
+org.springframework.context.annotation.internalCommonAnnotationProcessor
+org.springframework.context.event.internalEventListenerProcessor
+org.springframework.context.event.internalEventListenerFactory
+bean1
+bean2
+</code></pre>
+<p>但此时获取的bean并不是完全可用的，我们打印下</p>
+<pre><code class="language-java">System.out.println(beanFactory.getBean(Bean1.class).getBean2());
+</code></pre>
+<p>结果如下：</p>
+<pre><code class="language-java">20:31:07.628 [main] DEBUG com.pig4cloud.pig.phone.PhoneApplication$Bean1 - 构造 Bean1()
+null
+
+</code></pre>
+<p>我们可以看出 bean1 构造出来了，但bean2却没有,这是因为@Autowired的功能还并没有被实现，此前我们添加的是 beanFactory的后处理器，解析的是@bean，要处理@Autowired、@Configuration注解，则需要添加bean的后处理器，下面上代码</p>
+<pre><code class="language-java">// Bean 后处理器, 针对 bean 的生命周期的各个阶段提供扩展, 例如 @Autowired @Resource ...
+beanFactory.getBeansOfType(BeanPostProcessor.class).values().forEach(beanPostProcessor -&gt; {
+            beanFactory.addBeanPostProcessor(beanPostProcessor);
+        });
+</code></pre>
+<p>打印结果：</p>
+<pre><code class="language-java">20:36:30.885 [main] DEBUG com.pig4cloud.pig.phone.PhoneApplication$Bean1 - 构造 Bean1()
+20:36:30.896 [main] DEBUG org.springframework.beans.factory.support.DefaultListableBeanFactory - Creating shared instance of singleton bean 'bean2'
+</code></pre>
+]]></content>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[Hello Gridea]]></title>
+        <id>https://jzf936389030.github.io/BoiledPork/post/hello-gridea/</id>
+        <link href="https://jzf936389030.github.io/BoiledPork/post/hello-gridea/">
+        </link>
+        <updated>2018-12-11T16:00:00.000Z</updated>
+        <summary type="html"><![CDATA[<p>👏  欢迎使用 <strong>Gridea</strong> ！<br>
+✍️  <strong>Gridea</strong> 一个静态博客写作客户端。你可以用它来记录你的生活、心情、知识、笔记、创意... ...</p>
+]]></summary>
+        <content type="html"><![CDATA[<p>👏  欢迎使用 <strong>Gridea</strong> ！<br>
+✍️  <strong>Gridea</strong> 一个静态博客写作客户端。你可以用它来记录你的生活、心情、知识、笔记、创意... ...</p>
+<!-- more -->
+<p><a href="https://github.com/getgridea/gridea">Github</a><br>
+<a href="https://gridea.dev/">Gridea 主页</a><br>
+<a href="https://fehey.com/">示例网站</a></p>
+<h2 id="特性">特性👇</h2>
+<p>📝  你可以使用最酷的 <strong>Markdown</strong> 语法，进行快速创作</p>
+<p>🌉  你可以给文章配上精美的封面图和在文章任意位置插入图片</p>
+<p>🏷️  你可以对文章进行标签分组</p>
+<p>📋  你可以自定义菜单，甚至可以创建外部链接菜单</p>
+<p>💻  你可以在 <strong>Windows</strong>，<strong>MacOS</strong> 或 <strong>Linux</strong> 设备上使用此客户端</p>
+<p>🌎  你可以使用 <strong>𝖦𝗂𝗍𝗁𝗎𝖻 𝖯𝖺𝗀𝖾𝗌</strong> 或 <strong>Coding Pages</strong> 向世界展示，未来将支持更多平台</p>
+<p>💬  你可以进行简单的配置，接入 <a href="https://github.com/gitalk/gitalk">Gitalk</a> 或 <a href="https://github.com/SukkaW/DisqusJS">DisqusJS</a> 评论系统</p>
+<p>🇬🇧  你可以使用<strong>中文简体</strong>或<strong>英语</strong></p>
+<p>🌁  你可以任意使用应用内默认主题或任意第三方主题，强大的主题自定义能力</p>
+<p>🖥  你可以自定义源文件夹，利用 OneDrive、百度网盘、iCloud、Dropbox 等进行多设备同步</p>
+<p>🌱 当然 <strong>Gridea</strong> 还很年轻，有很多不足，但请相信，它会不停向前 🏃</p>
+<p>未来，它一定会成为你离不开的伙伴</p>
+<p>尽情发挥你的才华吧！</p>
+<p>😘 Enjoy~</p>
+]]></content>
+    </entry>
+</feed>
