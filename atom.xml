@@ -1,0 +1,518 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+    <id>https://jzf936389030.github.io/BoiledPork</id>
+    <title>BoiledPork</title>
+    <updated>2022-10-18T03:32:37.378Z</updated>
+    <generator>https://github.com/jpmonette/feed</generator>
+    <link rel="alternate" href="https://jzf936389030.github.io/BoiledPork"/>
+    <link rel="self" href="https://jzf936389030.github.io/BoiledPork/atom.xml"/>
+    <subtitle>vbb-温故而知新</subtitle>
+    <logo>https://jzf936389030.github.io/BoiledPork/images/avatar.png</logo>
+    <icon>https://jzf936389030.github.io/BoiledPork/favicon.ico</icon>
+    <rights>All rights reserved 2022, BoiledPork</rights>
+    <entry>
+        <title type="html"><![CDATA[深入学习：spring三级缓存，解决循环依赖]]></title>
+        <id>https://jzf936389030.github.io/BoiledPork/post/shen-ru-xue-xi-spring-san-ji-huan-cun-jie-jue-xun-huan-yi-lai/</id>
+        <link href="https://jzf936389030.github.io/BoiledPork/post/shen-ru-xue-xi-spring-san-ji-huan-cun-jie-jue-xun-huan-yi-lai/">
+        </link>
+        <updated>2022-10-11T03:48:39.000Z</updated>
+        <content type="html"><![CDATA[<h3 id="1什么是循环依赖">1.什么是循环依赖？</h3>
+<p>循环依赖：说白是一个或多个对象实例之间存在直接或间接的依赖关系，这种依赖关系构成了构成一个环形调用。<br>
+第一种情况：自己依赖自己的直接依赖</p>
+<pre><code class="language-java">@Service
+public class A {
+    @Autowired
+    private A a;
+}
+</code></pre>
+<p><img src="https://jzf936389030.github.io/BoiledPork/post-images/1665470298494.png" alt="" loading="lazy"><br>
+第二种情况：两个对象之间的直接依赖</p>
+<pre><code class="language-java">@Service
+public class A {
+    @Autowired
+    private B b;
+}
+
+@Service
+public class B {
+    @Autowired
+    private A a;
+}
+</code></pre>
+<p><img src="https://jzf936389030.github.io/BoiledPork/post-images/1665470323486.png" alt="" loading="lazy"><br>
+第三种情况：多个对象之间的间接依赖</p>
+<pre><code class="language-java">@Service
+public class A {
+    @Autowired
+    private B b;
+}
+
+@Service
+public class B {
+    @Autowired
+    private C c;
+}
+@Service
+public class C {
+    @Autowired
+    private A a;
+}
+</code></pre>
+<p><img src="https://jzf936389030.github.io/BoiledPork/post-images/1665470329309.png" alt="" loading="lazy"><br>
+前两种场景，得益于spring强大的功能，帮我们完美额规避掉了。<br>
+至于spring是如何解决的我们下面详细的进行介绍。</p>
+<h3 id="2bean的创建流程">2.bean的创建流程</h3>
+<p>在深入分析三级缓存之前，得先了解spring创建bean的流程<br>
+<img src="https://jzf936389030.github.io/BoiledPork/post-images/1665471176068.png" alt="" loading="lazy"></p>
+<ul>
+<li>createBeanInstance：实例化，其实也就是调用对象的构造方法实例化对象</li>
+<li>populateBean：填充属性，这一步主要是对bean的依赖属性进行注入(@Autowired)</li>
+<li>initializeBean：回到一些形如initMethod、InitializingBean等方法<br>
+从图中 单例Bean的初始化可以看出，循环依赖主要发生在第二步（populateBean），也就是field属性注入的处理。</li>
+</ul>
+<h3 id="3spring内部的三级缓存">3.spring内部的三级缓存</h3>
+<ul>
+<li>singletonObjects  一级缓存，用于保存实例化、注入、初始化完成的bean实例</li>
+<li>earlySingletonObjects  二级缓存，用于保存实例化完成的bean实例</li>
+<li>singletonFactories  三级缓存，用于保存bean创建工厂，以便于后面扩展有机会创建代理对象。</li>
+</ul>
+<p><strong>详解</strong><br>
+所有被 Spring 管理的 Bean，最终都会存放在 singletonObjects 中，这里面存放的 Bean 是经历了所有生命周期的（除了销毁的生命周期），完整的，可以给用户使用的。</p>
+<p>earlySingletonObjects 存放的是已经被实例化，但是还没有注入属性和执行 init 方法的 Bean。</p>
+<p>singletonFactories 存放的是生产 Bean 的工厂。</p>
+<p>Bean 都已经实例化了，为什么还需要一个生产 Bean 的工厂呢？这里实际上是跟 AOP 有关，如果项目中不需要为 Bean 进行代理，那么这个 Bean 工厂就会直接返回一开始实例化的对象，如果需要使用 AOP 进行代理，那么这个工厂就会发挥重要的作用了，这也是本文需要重点关注的问题之一。</p>
+<pre><code class="language-java">public class DefaultSingletonBeanRegistry extends SimpleAliasRegistry implements SingletonBeanRegistry {
+	...
+	// 从上至下 分表代表这“三级缓存”
+	private final Map&lt;String, Object&gt; singletonObjects = new ConcurrentHashMap&lt;&gt;(256); //一级缓存
+	private final Map&lt;String, Object&gt; earlySingletonObjects = new HashMap&lt;&gt;(16); // 二级缓存
+	private final Map&lt;String, ObjectFactory&lt;?&gt;&gt; singletonFactories = new HashMap&lt;&gt;(16); // 三级缓存
+	...
+	
+	/** Names of beans that are currently in creation. */
+	// 这个缓存也十分重要：它表示bean创建过程中都会在里面呆着~
+	// 它在Bean开始创建时放值，创建完成时会将其移出~
+	private final Set&lt;String&gt; singletonsCurrentlyInCreation = Collections.newSetFromMap(new ConcurrentHashMap&lt;&gt;(16));
+
+	/** Names of beans that have already been created at least once. */
+	// 当这个Bean被创建完成后，会标记为这个 注意：这里是set集合 不会重复
+	// 至少被创建了一次的  都会放进这里~~~~
+	private final Set&lt;String&gt; alreadyCreated = Collections.newSetFromMap(new ConcurrentHashMap&lt;&gt;(256));
+}
+</code></pre>
+<p><strong>获取单例Bean的源码如下：</strong></p>
+<pre><code class="language-java">public class DefaultSingletonBeanRegistry extends SimpleAliasRegistry implements SingletonBeanRegistry {
+	...
+	@Override
+	@Nullable
+	public Object getSingleton(String beanName) {
+		return getSingleton(beanName, true);
+	}
+	@Nullable
+	protected Object getSingleton(String beanName, boolean allowEarlyReference) {
+	// 从一级缓存singletonObjects获取bean
+	Object singletonObject = this.singletonObjects.get(beanName);
+	// 一级缓存没有，判断该bean是否在创建中，通过Set的contains来判断
+	if (singletonObject == null &amp;&amp; isSingletonCurrentlyInCreation(beanName)) {
+		synchronized (this.singletonObjects) {
+			// 从二级缓存中获取bean
+			singletonObject = this.earlySingletonObjects.get(beanName);
+			// 二级缓存没有&amp;&amp;允许提前引用
+			if (singletonObject == null &amp;&amp; allowEarlyReference) {
+				// 从三级缓存中获取lambda表达式
+				ObjectFactory&lt;?&gt; singletonFactory = this.singletonFactories.get(beanName);
+				if (singletonFactory != null) {
+					// 调用三级缓存的lambda表示获取早期不完整对象
+					singletonObject = singletonFactory.getObject();
+					// 写入二级缓存
+					this.earlySingletonObjects.put(beanName, singletonObject);
+					// 三级缓存移除该bean的lambda表达式
+					this.singletonFactories.remove(beanName);
+				}
+			}
+		}
+	}
+	return singletonObject;
+}
+
+public boolean isSingletonCurrentlyInCreation(String beanName) {
+	return this.singletonsCurrentlyInCreation.contains(beanName);
+}
+
+	...
+	public boolean isSingletonCurrentlyInCreation(String beanName) {
+		return this.singletonsCurrentlyInCreation.contains(beanName);
+	}
+	protected boolean isActuallyInCreation(String beanName) {
+		return isSingletonCurrentlyInCreation(beanName);
+	}
+	...
+}
+</code></pre>
+<h3 id="4bean创建关键步骤源码走势解析">4.bean创建关键步骤源码走势解析</h3>
+<p>此处以如上的A、B类的互相依赖注入为例，在这里表达出关键代码的走势：<br>
+1、入口处即是实例化、初始化A这个单例Bean。<strong>AbstractBeanFactory.doGetBean(&quot;a&quot;)</strong></p>
+<pre><code class="language-java">protected &lt;T&gt; T doGetBean(...){
+    // 此时a不存在任何一级缓存中，且不是在创建中  所以此处返回null
+	// 此处若不为null，然后从缓存里拿就可以了(主要处理FactoryBean和BeanFactory情况吧)
+	Object beanInstance = getSingleton(beanName, false);
+	... 
+	// 标记beanName a是已经创建过至少一次的~~~ 它会一直存留在缓存里不会被移除（除非抛出了异常）
+	// 参见缓存Set&lt;String&gt; alreadyCreated = Collections.newSetFromMap(new ConcurrentHashMap&lt;&gt;(256))
+	if (!typeCheckOnly) {
+		markBeanAsCreated(beanName);
+	}
+	...
+	// 这个getSingleton方法非常关键。
+	//1、标注a正在创建中~
+	//2、调用singletonObject = singletonFactory.getObject();（实际上调用的是createBean()方法）  因此这一步最为关键
+	//3、此时实例已经创建完成  会把a移除整整创建的缓存中
+	//4、执行addSingleton()添加进去。（备注：注册bean的接口方法为registerSingleton，它依赖于addSingleton方法）
+	sharedInstance = getSingleton(beanName, () -&gt; { ... return createBean(beanName, mbd, args); });
+}
+</code></pre>
+<p>2、下面进入到最为核心的AbstractAutowireCapableBeanFactory.createBean/doCreateBean()环节，创建A的实例</p>
+<pre><code class="language-java">protected Object doCreateBean(){
+	...
+	// 使用构造器/工厂方法   instanceWrapper是一个BeanWrapper
+	instanceWrapper = createBeanInstance(beanName, mbd, args);
+	// 此处bean为&quot;原始Bean&quot;   也就是这里的A实例对象：A@1234
+	final Object bean = instanceWrapper.getWrappedInstance();
+	...
+	// 是否要提前暴露（允许循环依赖）  现在此处A是被允许的
+	boolean earlySingletonExposure = (mbd.isSingleton() &amp;&amp; this.allowCircularReferences &amp;&amp; isSingletonCurrentlyInCreation(beanName));
+	
+	// 允许暴露，就把A绑定在ObjectFactory上，注册到三级缓存`singletonFactories`里面去保存着
+	// Tips:这里后置处理器的getEarlyBeanReference方法会被促发，自动代理创建器在此处创建代理对象（注意执行时机 为执行三级缓存的时候）
+	if (earlySingletonExposure) {
+		addSingletonFactory(beanName, () -&gt; getEarlyBeanReference(beanName, mbd, bean));
+	}
+	...
+	// exposedObject 为最终返回的对象，此处为原始对象bean也就是A@1234,下面会有用处
+	Object exposedObject = bean; 
+	// 给A@1234属性完成赋值，@Autowired在此处起作用~
+	// 因此此处会调用getBean(&quot;b&quot;)，so 会重复上面步骤创建B类的实例
+	// 此处我们假设B已经创建好了 为B@5678
+	
+	// 需要注意的是在populateBean(&quot;b&quot;)的时候依赖有beanA，所以此时候调用getBean(&quot;a&quot;)最终会调用getSingleton(&quot;a&quot;)，
+	//此时候上面说到的getEarlyBeanReference方法就会被执行。这也解释为何我们@Autowired是个代理对象，而不是普通对象的根本原因
+	
+	populateBean(beanName, mbd, instanceWrapper);
+	// 实例化。这里会执行后置处理器BeanPostProcessor的两个方法
+	// 此处注意：postProcessAfterInitialization()是有可能返回一个代理对象的，这样exposedObject 就不再是原始对象了  特备注意哦~~~
+	// 比如处理@Aysnc的AsyncAnnotationBeanPostProcessor它就是在这个时间里生成代理对象的（有坑，请小心使用@Aysnc）
+	exposedObject = initializeBean(beanName, exposedObject, mbd);
+
+	... // 至此，相当于A@1234已经实例化完成、初始化完成（属性也全部赋值了~）
+	// 这一步我把它理解为校验：校验：校验是否有循环引用问题~~~~~
+
+	if (earlySingletonExposure) {
+		// 注意此处第二个参数传的false，表示不去三级缓存里singletonFactories再去调用一次getObject()方法了~~~
+		// 上面建讲到了由于B在初始化的时候，会触发A的ObjectFactory.getObject()  所以a此处已经在二级缓存earlySingletonObjects里了
+		// 因此此处返回A的实例：A@1234
+		Object earlySingletonReference = getSingleton(beanName, false);
+		if (earlySingletonReference != null) {
+		
+			// 这个等式表示，exposedObject若没有再被代理过，这里就是相等的
+			// 显然此处我们的a对象的exposedObject它是没有被代理过的  所以if会进去~
+			// 这种情况至此，就全部结束了~~~
+			if (exposedObject == bean) {
+				exposedObject = earlySingletonReference;
+			}
+	
+			// 继续以A为例，比如方法标注了@Aysnc注解，exposedObject此时候就是一个代理对象，因此就会进到这里来
+			//hasDependentBean(beanName)是肯定为true，因为getDependentBeans(beanName)得到的是[&quot;b&quot;]这个依赖
+			else if (!this.allowRawInjectionDespiteWrapping &amp;&amp; hasDependentBean(beanName)) {
+				String[] dependentBeans = getDependentBeans(beanName);
+				Set&lt;String&gt; actualDependentBeans = new LinkedHashSet&lt;&gt;(dependentBeans.length);
+
+				// A@1234依赖的是[&quot;b&quot;]，所以此处去检查b
+				// 如果最终存在实际依赖的bean：actualDependentBeans不为空 那就抛出异常  证明循环引用了~
+				for (String dependentBean : dependentBeans) {
+					// 这个判断原则是：如果此时候b并还没有创建好，this.alreadyCreated.contains(beanName)=true表示此bean已经被创建过，就返回false
+					// 若该bean没有在alreadyCreated缓存里，就是说没被创建过(其实只有CreatedForTypeCheckOnly才会是此仓库)
+					if (!removeSingletonIfCreatedForTypeCheckOnly(dependentBean)) {
+						actualDependentBeans.add(dependentBean);
+					}
+				}
+				if (!actualDependentBeans.isEmpty()) {
+					throw new BeanCurrentlyInCreationException(beanName,
+							&quot;Bean with name '&quot; + beanName + &quot;' has been injected into other beans [&quot; +
+							StringUtils.collectionToCommaDelimitedString(actualDependentBeans) +
+							&quot;] in its raw version as part of a circular reference, but has eventually been &quot; +
+							&quot;wrapped. This means that said other beans do not use the final version of the &quot; +
+							&quot;bean. This is often the result of over-eager type matching - consider using &quot; +
+							&quot;'getBeanNamesOfType' with the 'allowEagerInit' flag turned off, for example.&quot;);
+				}
+			}
+		}
+	}
+}
+</code></pre>
+<p>这里给出一张网上整理啊A、B创建的流程图：(test1、test2代指A、B)<br>
+<img src="https://jzf936389030.github.io/BoiledPork/post-images/1665488653354.png" alt="" loading="lazy"><br>
+用文字再描述一遍：</p>
+<ul>
+<li>实例化 A，此时 A 还未完成属性填充和初始化方法（@PostConstruct）的执行，A 只是一个半成品。</li>
+<li>为 A 创建一个 Bean 工厂，并放入到 singletonFactories 中。</li>
+<li>发现 A 需要注入 B 对象，但是一级、二级、三级缓存均为发现对象 B。</li>
+<li>实例化 B，此时 B 还未完成属性填充和初始化方法（@PostConstruct）的执行，B 只是一个半成品。</li>
+<li>为 B 创建一个 Bean 工厂，并放入到 singletonFactories 中。</li>
+<li>发现 B 需要注入 A 对象，此时在一级、二级未发现对象 A，但是在三级缓存中发现了对象 A，从三级 缓存中得到对象 A，并将对象 A 放入二级缓存中，同时删除三级缓存中的对象 A。（注意，此时的 A 还是一个半成品，并没有完成属性填充和执行初始化方法）</li>
+<li>将对象 A 注入到对象 B 中。</li>
+<li>对象 B 完成属性填充，执行初始化方法，并放入到一级缓存中，同时删除二级缓存中的对象 B。（此时对象 B 已经是一个成品）<br>
+对象 A 得到对象 B，将对象 B 注入到对象 A 中。（对象 A 得到的是一个完整的对象 B）<br>
+对象 A 完成属性填充，执行初始化方法，并放入到一级缓存中，同时删除二级缓存中的对象 A。</li>
+<li>到此，B持有的已经是初始化完成的A，A持有的也是初始化完成的B</li>
+</ul>
+<h3 id="提问三级缓存的作用">提问：三级缓存的作用</h3>
+<p>添加三级缓存的方法如下：</p>
+<pre><code class="language-java">protected void addSingletonFactory(String beanName, ObjectFactory&lt;?&gt; singletonFactory) {
+  Assert.notNull(singletonFactory, &quot;Singleton factory must not be null&quot;);
+  synchronized (this.singletonObjects) {
+    if (!this.singletonObjects.containsKey(beanName)) { // 判断一级缓存中不存在此对象
+      this.singletonFactories.put(beanName, singletonFactory); // 添加至三级缓存
+      this.earlySingletonObjects.remove(beanName); // 确保二级缓存没有此对象
+      this.registeredSingletons.add(beanName);
+    }
+  }
+}
+
+@FunctionalInterface
+public interface ObjectFactory&lt;T&gt; {
+  T getObject() throws BeansException;
+}
+</code></pre>
+<p>Spring 在实例化对象的之后，就会为其创建一个 Bean 工厂，并将此工厂加入到三级缓存中。<br>
+因此，Spring 一开始提前暴露的并不是实例化的 Bean，而是将 Bean 包装起来的 ObjectFactory。为什么要这么做呢？</p>
+<p>这实际上涉及到 AOP，如果创建的 Bean 是有代理的，那么注入的就应该是代理 Bean，而不是原始的 Bean。但是 Spring 一开始并不知道 Bean 是否会有循环依赖，通常情况下（没有循环依赖的情况下），Spring 都会在完成填充属性，并且执行完初始化方法之后再为其创建代理。但是，如果出现了循环依赖的话，Spring 就不得不为其提前创建代理对象，否则注入的就是一个原始对象，而不是代理对象。因此，这里就涉及到应该在哪里提前创建代理对象？</p>
+<p>Spring 的做法就是在 ObjectFactory 中去提前创建代理对象。它会执行 getObject() 方法来获取到 Bean。实际上，它真正执行的方法如下：</p>
+<pre><code class="language-java">protected Object getEarlyBeanReference(String beanName, RootBeanDefinition mbd, Object bean) {
+  Object exposedObject = bean;
+  if (!mbd.isSynthetic() &amp;&amp; hasInstantiationAwareBeanPostProcessors()) {
+    for (BeanPostProcessor bp : getBeanPostProcessors()) {
+      if (bp instanceof SmartInstantiationAwareBeanPostProcessor) {
+        SmartInstantiationAwareBeanPostProcessor ibp = (SmartInstantiationAwareBeanPostProcessor) bp;
+        // 如果需要代理，这里会返回代理对象；否则返回原始对象
+        exposedObject = ibp.getEarlyBeanReference(exposedObject, beanName);
+      }
+    }
+  }
+  return exposedObject;
+}
+</code></pre>
+<p>因为提前进行了代理，避免对后面重复创建代理对象，会在 earlyProxyReferences 中记录已被代理的对象。</p>
+<pre><code class="language-java">public abstract class AbstractAutoProxyCreator extends ProxyProcessorSupport
+    implements SmartInstantiationAwareBeanPostProcessor, BeanFactoryAware {
+  @Override
+  public Object getEarlyBeanReference(Object bean, String beanName) {
+    Object cacheKey = getCacheKey(bean.getClass(), beanName);
+    // 记录已被代理的对象
+    this.earlyProxyReferences.put(cacheKey, bean);
+    return wrapIfNecessary(bean, beanName, cacheKey);
+  }
+}
+</code></pre>
+<h3 id="为什么要用第二级缓存呢">为什么要用第二级缓存呢？</h3>
+<p>试想一下，如果出现以下这种情况，我们要如何处理？</p>
+<pre><code class="language-java">@Service
+public class TestService1 {
+
+    @Autowired
+    private TestService2 testService2;
+    @Autowired
+    private TestService3 testService3;
+
+    public void test1() {
+    }
+}
+</code></pre>
+<pre><code class="language-java">@Service
+public class TestService2 {
+
+    @Autowired
+    private TestService1 testService1;
+
+    public void test2() {
+    }
+}
+</code></pre>
+<pre><code class="language-java">@Service
+public class TestService3 {
+
+    @Autowired
+    private TestService1 testService1;
+
+    public void test3() {
+    }
+}
+</code></pre>
+<p>TestService1依赖于TestService2和TestService3，而TestService2依赖于TestService1，同时TestService3也依赖于TestService1。<br>
+按照上图的流程可以把TestService1注入到TestService2，并且TestService1的实例是从第三级缓存中获取的。</p>
+<p>假设不用第二级缓存，TestService1注入到TestService3的流程如图：</p>
+<figure data-type="image" tabindex="1"><img src="https://jzf936389030.github.io/BoiledPork/post-images/1666057128625.png" alt="" loading="lazy"></figure>
+<p><strong>TestService1注入到TestService3又需要从第三级缓存中获取实例，而第三级缓存里保存的并非真正的实例对象，而是ObjectFactory对象。说白了，两次从三级缓存中获取都是ObjectFactory对象，而通过它创建的实例对象每次可能都不一样的(TestService3和TestService2当中的TestService1不是同一个对象)</strong><br>
+<strong>为了解决这个问题，spring引入的第二级缓存。上面图1其实TestService1对象的实例已经被添加到第二级缓存中了，而在TestService1注入到TestService3时，只用从第二级缓存中获取该对象即可。</strong><br>
+<img src="https://jzf936389030.github.io/BoiledPork/post-images/1666057261106.png" alt="" loading="lazy"></p>
+<hr>
+<hr>
+<p>参考资料：<br>
+https://cloud.tencent.com/developer/article/1769948<br>
+https://cloud.tencent.com/developer/article/1497692<br>
+https://www.cainiaojc.com/note/qa38bw.html<br>
+如有侵权，请联系 936389030@qq.com 删除。</p>
+]]></content>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[BeanFactory详解]]></title>
+        <id>https://jzf936389030.github.io/BoiledPork/post/beanfactory-xiang-jie/</id>
+        <link href="https://jzf936389030.github.io/BoiledPork/post/beanfactory-xiang-jie/">
+        </link>
+        <updated>2022-09-22T11:21:59.000Z</updated>
+        <content type="html"><![CDATA[<p>BeanFactory定义了IOC容器的最基本形式，并提供了IOC容器应遵守的的最基本的接口。</p>
+<p>首先定义需要使用的类</p>
+<pre><code class="language-java">public class PhoneApplication {
+    @Configuration
+    static class Config {
+        @Bean
+        public Bean1 bean1() {
+            return new Bean1();
+        }
+
+        @Bean
+        public Bean2 bean2() {
+            return new Bean2();
+        }
+    }
+static class Bean1 {
+        private static final Logger log = LoggerFactory.getLogger(Bean1.class);
+
+        public Bean1() {
+            log.debug(&quot;构造 Bean1()&quot;);
+        }
+
+        @Autowired
+        private Bean2 bean2;
+
+        public Bean2 getBean2() {
+            return bean2;
+        }
+
+       
+    }
+static class Bean2 {
+        private static final Logger log = LoggerFactory.getLogger(Bean2.class);
+
+        public Bean2() {
+            log.debug(&quot;构造 Bean2()&quot;);
+        }
+    }
+
+}
+</code></pre>
+<p>DefaultListableBeanFactory 是BeanFactory 最重要的实现</p>
+<h3 id="使用-defaultlistablebeanfactory-添加bean的定义">使用 DefaultListableBeanFactory 添加bean的定义</h3>
+<pre><code class="language-java">public static void main(String[] args) {
+DefaultListableBeanFactory beanFactory = new DefaultListableBeanFactory();
+        // bean 的定义（class, scope, 初始化, 销毁）
+AbstractBeanDefinition beanDefinition =
+                BeanDefinitionBuilder.genericBeanDefinition(Config.class）.setScope(&quot;singleton&quot;).getBeanDefinition();
+        //构造好后放入beanFactory
+beanFactory.registerBeanDefinition(&quot;config&quot;, beanDefinition);
+
+for (String beanDefinitionName : beanFactory.getBeanDefinitionNames()) {
+            System.err.println(beanDefinitionName);
+        }
+}
+</code></pre>
+<p>执行结果<br>
+<img src="https://jzf936389030.github.io/BoiledPork/post-images/1663846627767.jpg" alt="" loading="lazy"><br>
+发现打印出来的只有config这一个bean，其中的bean1、bean2并没有被打印出来，也就说明了bean1、bean2 上方添加@Bean注解并没有生效，所以得出结论：beanFactory并没有解析@Configuration、@Bean、@Autowired的功能。</p>
+<h3 id="解析各种的注解并不是beanfactory的功能而是由各种后处理器提供的">解析各种的注解并不是beanFactory的功能，而是由各种后处理器提供的</h3>
+<p>给beanFactory添加各种后处理器</p>
+<pre><code class="language-java">AnnotationConfigUtils.registerAnnotationConfigProcessors(beanFactory);
+</code></pre>
+<p>打印结果如下：</p>
+<pre><code class="language-java">Config
+//解析@Configuration
+org.springframework.context.annotation.internalConfigurationAnnotationProcessor
+//解析@Autowired
+org.springframework.context.annotation.internalAutowiredAnnotationProcessor
+//解析@Resource
+org.springframework.context.annotation.internalCommonAnnotationProcessor
+org.springframework.context.event.internalEventListenerProcessor
+org.springframework.context.event.internalEventListenerFactory
+</code></pre>
+<p>此时打印信息中已经出现了各种后处理器，但bean1、bean2并没有被打印出来，我们接下往下看<br>
+此前我们只是把各种后处理器添加到beanFactory中，但它们并没有工作，换句话说就是，此时添加的后处理器并没有跟beanFactory产生关系,添加以下代码即可让他们产生。</p>
+<pre><code class="language-java">        //获取各种BeanFactory后处理器
+beanFactory.getBeansOfType(BeanFactoryPostProcessor.class).values().forEach(beanFactoryPostProcessor -&gt; {
+            beanFactoryPostProcessor.postProcessBeanFactory(beanFactory);
+        });
+for (String beanDefinitionName : beanFactory.getBeanDefinitionNames()) {
+            System.err.println(beanDefinitionName);
+        }
+</code></pre>
+<p>打印结果如下：bean1、bean2已经被打印出来了</p>
+<pre><code class="language-java">Config
+org.springframework.context.annotation.internalConfigurationAnnotationProcessor
+org.springframework.context.annotation.internalAutowiredAnnotationProcessor
+org.springframework.context.annotation.internalCommonAnnotationProcessor
+org.springframework.context.event.internalEventListenerProcessor
+org.springframework.context.event.internalEventListenerFactory
+bean1
+bean2
+</code></pre>
+<p>但此时获取的bean并不是完全可用的，我们打印下</p>
+<pre><code class="language-java">System.out.println(beanFactory.getBean(Bean1.class).getBean2());
+</code></pre>
+<p>结果如下：</p>
+<pre><code class="language-java">20:31:07.628 [main] DEBUG com.pig4cloud.pig.phone.PhoneApplication$Bean1 - 构造 Bean1()
+null
+
+</code></pre>
+<p>我们可以看出 bean1 构造出来了，但bean2却没有,这是因为@Autowired的功能还并没有被实现，此前我们添加的是 beanFactory的后处理器，解析的是@bean，要处理@Autowired、@Configuration注解，则需要添加bean的后处理器，下面上代码</p>
+<pre><code class="language-java">// Bean 后处理器, 针对 bean 的生命周期的各个阶段提供扩展, 例如 @Autowired @Resource ...
+beanFactory.getBeansOfType(BeanPostProcessor.class).values().forEach(beanPostProcessor -&gt; {
+            beanFactory.addBeanPostProcessor(beanPostProcessor);
+        });
+</code></pre>
+<p>打印结果：</p>
+<pre><code class="language-java">20:36:30.885 [main] DEBUG com.pig4cloud.pig.phone.PhoneApplication$Bean1 - 构造 Bean1()
+20:36:30.896 [main] DEBUG org.springframework.beans.factory.support.DefaultListableBeanFactory - Creating shared instance of singleton bean 'bean2'
+</code></pre>
+]]></content>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[Hello Gridea]]></title>
+        <id>https://jzf936389030.github.io/BoiledPork/post/hello-gridea/</id>
+        <link href="https://jzf936389030.github.io/BoiledPork/post/hello-gridea/">
+        </link>
+        <updated>2018-12-11T16:00:00.000Z</updated>
+        <summary type="html"><![CDATA[<p>👏  欢迎使用 <strong>Gridea</strong> ！<br>
+✍️  <strong>Gridea</strong> 一个静态博客写作客户端。你可以用它来记录你的生活、心情、知识、笔记、创意... ...</p>
+]]></summary>
+        <content type="html"><![CDATA[<p>👏  欢迎使用 <strong>Gridea</strong> ！<br>
+✍️  <strong>Gridea</strong> 一个静态博客写作客户端。你可以用它来记录你的生活、心情、知识、笔记、创意... ...</p>
+<!-- more -->
+<p><a href="https://github.com/getgridea/gridea">Github</a><br>
+<a href="https://gridea.dev/">Gridea 主页</a><br>
+<a href="https://fehey.com/">示例网站</a></p>
+<h2 id="特性">特性👇</h2>
+<p>📝  你可以使用最酷的 <strong>Markdown</strong> 语法，进行快速创作</p>
+<p>🌉  你可以给文章配上精美的封面图和在文章任意位置插入图片</p>
+<p>🏷️  你可以对文章进行标签分组</p>
+<p>📋  你可以自定义菜单，甚至可以创建外部链接菜单</p>
+<p>💻  你可以在 <strong>Windows</strong>，<strong>MacOS</strong> 或 <strong>Linux</strong> 设备上使用此客户端</p>
+<p>🌎  你可以使用 <strong>𝖦𝗂𝗍𝗁𝗎𝖻 𝖯𝖺𝗀𝖾𝗌</strong> 或 <strong>Coding Pages</strong> 向世界展示，未来将支持更多平台</p>
+<p>💬  你可以进行简单的配置，接入 <a href="https://github.com/gitalk/gitalk">Gitalk</a> 或 <a href="https://github.com/SukkaW/DisqusJS">DisqusJS</a> 评论系统</p>
+<p>🇬🇧  你可以使用<strong>中文简体</strong>或<strong>英语</strong></p>
+<p>🌁  你可以任意使用应用内默认主题或任意第三方主题，强大的主题自定义能力</p>
+<p>🖥  你可以自定义源文件夹，利用 OneDrive、百度网盘、iCloud、Dropbox 等进行多设备同步</p>
+<p>🌱 当然 <strong>Gridea</strong> 还很年轻，有很多不足，但请相信，它会不停向前 🏃</p>
+<p>未来，它一定会成为你离不开的伙伴</p>
+<p>尽情发挥你的才华吧！</p>
+<p>😘 Enjoy~</p>
+]]></content>
+    </entry>
+</feed>
